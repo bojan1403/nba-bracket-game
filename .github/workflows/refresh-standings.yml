@@ -1,0 +1,16 @@
+name: Refresh NBA standings
+
+on:
+  schedule:
+    - cron: "0 9 * * *"       # every day at 09:00 UTC, after the previous night's games
+  workflow_dispatch:           # run it manually from the Actions tab
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the app's refresh endpoint
+        run: |
+          curl -fsS --retry 3 --max-time 120 -X POST \
+            -H "Authorization: Bearer ${{ secrets.REFRESH_TOKEN }}" \
+            "${{ vars.SITE_URL }}/internal/refresh-standings"
