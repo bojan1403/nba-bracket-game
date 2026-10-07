@@ -118,39 +118,50 @@ def leaderboard(actual):
         board.append((r.name, raw - late, late))
     return sorted(board, key=lambda x: (-x[1], x[0].lower()))
 
-# ---------- standings provider (API-Sports; swap this one function to change provider) ----------
-def fetch_standings():
-    now = datetime.now(timezone.utc)
-    season = os.environ.get("STANDINGS_SEASON") or (now.year if now.month >= 9 else now.year - 1)
-    req = urllib.request.Request(
-        f"https://v2.nba.api-sports.io/standings?league=standard&season={season}",
-        headers={"x-apisports-key": os.environ["STANDINGS_API_KEY"]})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        items = json.load(r)["response"]
-    out = {"E": [], "W": []}
-    for it in items:
-        c = it["conference"]["name"][:1].upper()    # "east" / "west"
-        if c in out:
-            out[c].append((it["conference"]["rank"], it["team"]["name"], it["win"]["total"], it["loss"]["total"]))
-    return {c: sorted(v) for c, v in out.items()}
+# ---------- standings provider (ESPN's public JSON feed, no API key; swap this one function to change provider) ----------
+ESPN_URL = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
 
-@app.post("/internal/refresh-standings")           # called once a day by a scheduled GitHub Action
+def fetch_standings():
+    """Returns {"E": [(seed, team, wins, losses), ...], "W": [...]} sorted by conference seed."""
+    req = urllib.request.Request(ESPN_URL, headers={"User-Agent": "nba-predictions/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.load(r)
+    out = {"E": [], "W": []}
+    for conf in data.get("children", []):
+        c = (conf.get("abbreviation") or conf.get("name") or "")[:1].upper()      # "East" / "West"
+        if c not in out:
+            continue
+        for e in conf.get("standings", {}).get("entries", []):
+            st = {x.get("name"): x.get("value") for x in e.get("stats", [])}
+            seed = int(st.get("playoffSeed") or 0)
+            out[c].append((seed if seed > 0 else 99, -(st.get("winPercent") or 0.0),
+                           e["team"]["displayName"], int(st.get("wins") or 0), int(st.get("losses") or 0)))
+    # sort by seed (win % as tie-break), then keep (seed-position, team, wins, losses)
+    return {c: [(i, t[2], t[3], t[4]) for i, t in enumerate(sorted(v), start=1)] for c, v in out.items()}
+
+@app.post("/internal/refresh-standings")           # called once a day by a scheduled job
 def refresh_standings():
     token = os.environ.get("REFRESH_TOKEN", "")
     sent = request.headers.get("Authorization", "").removeprefix("Bearer ")
     if not token or not hmac.compare_digest(sent.encode(), token.encode()):
         return "Forbidden", 403
+    start = season_start()
+    if start and datetime.now(timezone.utc) < start and not request.args.get("force"):
+        # Before tip-off the feed shows LAST season's final table; loading it would score players against the wrong season.
+        return {"ok": True, "skipped": "season has not started yet (use ?force=1 to load anyway, for testing)"}
     data = fetch_standings()
     if len(data["E"]) != 15 or len(data["W"]) != 15:
-        return "Unexpected data from provider, nothing updated", 502
+        return f"Unexpected data from provider, nothing updated (got {len(data['E'])} East and {len(data['W'])} West teams, expected 15 each)", 502
     for c, names in (("E", EAST), ("W", WEST)):     # scoring matches teams by name, so names must agree
         diff = {t[1] for t in data[c]} ^ set(names)
         if diff:
             return f"Provider team names differ from the dropdown lists, nothing updated: {sorted(diff)}", 502
+    if sum(t[2] + t[3] for c in data for t in data[c]) == 0:
+        return {"ok": True, "skipped": "no games played yet, standings left unchanged"}
     d = db()
     d.execute("DELETE FROM standings")
     for c, teams in data.items():
-        for pos, (_, team, w, l) in enumerate(teams, start=1):
+        for pos, team, w, l in teams:
             d.execute("INSERT INTO standings(conf, pos, team, wins, losses) VALUES(?,?,?,?,?)", (c, pos, team, w, l))
     d.commit()
     return {"ok": True}
