@@ -136,8 +136,16 @@ def fetch_standings():
             seed = int(st.get("playoffSeed") or 0)
             out[c].append((seed if seed > 0 else 99, -(st.get("winPercent") or 0.0),
                            e["team"]["displayName"], int(st.get("wins") or 0), int(st.get("losses") or 0)))
+    meta = {}                                       # which season the feed is showing (seasonType 2 = regular season)
+    for conf in data.get("children", []):
+        st = conf.get("standings", {})
+        if "seasonType" in st:
+            meta = {"season": st.get("seasonDisplayName") or st.get("season"), "season_type": st.get("seasonType")}
+            break
     # sort by seed (win % as tie-break), then keep (seed-position, team, wins, losses)
-    return {c: [(i, t[2], t[3], t[4]) for i, t in enumerate(sorted(v), start=1)] for c, v in out.items()}
+    res = {c: [(i, t[2], t[3], t[4]) for i, t in enumerate(sorted(v), start=1)] for c, v in out.items()}
+    res["meta"] = meta
+    return res
 
 @app.post("/internal/refresh-standings")           # called once a day by a scheduled job
 def refresh_standings():
@@ -150,21 +158,25 @@ def refresh_standings():
         # Before tip-off the feed shows LAST season's final table; loading it would score players against the wrong season.
         return {"ok": True, "skipped": "season has not started yet (use ?force=1 to load anyway, for testing)"}
     data = fetch_standings()
+    meta = data["meta"]
+    if meta.get("season_type") not in (None, 2) and not request.args.get("force"):
+        # The feed also serves PRESEASON tables (seasonType 1); scoring players against those would be wrong.
+        return {"ok": True, "skipped": "feed is not showing regular-season standings", "feed": meta}
     if len(data["E"]) != 15 or len(data["W"]) != 15:
         return f"Unexpected data from provider, nothing updated (got {len(data['E'])} East and {len(data['W'])} West teams, expected 15 each)", 502
     for c, names in (("E", EAST), ("W", WEST)):     # scoring matches teams by name, so names must agree
         diff = {t[1] for t in data[c]} ^ set(names)
         if diff:
             return f"Provider team names differ from the dropdown lists, nothing updated: {sorted(diff)}", 502
-    if sum(t[2] + t[3] for c in data for t in data[c]) == 0:
-        return {"ok": True, "skipped": "no games played yet, standings left unchanged"}
+    if sum(t[2] + t[3] for c in ("E", "W") for t in data[c]) == 0:
+        return {"ok": True, "skipped": "no games played yet, standings left unchanged", "feed": meta}
     d = db()
     d.execute("DELETE FROM standings")
-    for c, teams in data.items():
-        for pos, team, w, l in teams:
+    for c in ("E", "W"):
+        for pos, team, w, l in data[c]:
             d.execute("INSERT INTO standings(conf, pos, team, wins, losses) VALUES(?,?,?,?,?)", (c, pos, team, w, l))
     d.commit()
-    return {"ok": True}
+    return {"ok": True, "loaded": meta}
 
 # ---------- email: confirmation and password reset ----------
 def send_mail(to, subject, body):
