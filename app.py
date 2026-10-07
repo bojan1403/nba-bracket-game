@@ -1,4 +1,4 @@
-import hmac, json, math, os, smtplib, urllib.request
+import hmac, json, math, os, re, smtplib, unicodedata, urllib.request
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -38,6 +38,10 @@ IF OBJECT_ID('dbo.predictions','U') IS NULL CREATE TABLE dbo.predictions(
 IF OBJECT_ID('dbo.standings','U') IS NULL CREATE TABLE dbo.standings(
   conf CHAR(1) NOT NULL, pos INT NOT NULL, team NVARCHAR(100) NOT NULL, wins INT, losses INT,
   updated DATETIME2 DEFAULT SYSUTCDATETIME(), PRIMARY KEY(conf, pos));
+IF OBJECT_ID('dbo.award_picks','U') IS NULL CREATE TABLE dbo.award_picks(
+  email NVARCHAR(254) NOT NULL, award VARCHAR(10) NOT NULL, pick NVARCHAR(100) NOT NULL, PRIMARY KEY(email, award));
+IF OBJECT_ID('dbo.award_results','U') IS NULL CREATE TABLE dbo.award_results(
+  award VARCHAR(10) PRIMARY KEY, winner NVARCHAR(200) NOT NULL, updated DATETIME2 DEFAULT SYSUTCDATETIME());
 """
 _schema_ready = False
 
@@ -109,13 +113,44 @@ def score_conference(pred, actual):
 def compute_score(pred_east, pred_west, actual_east, actual_west):
     return score_conference(pred_east, actual_east) + score_conference(pred_west, actual_west)
 
+# ---------- individual awards ----------
+AWARDS = [("mvp", "Most Valuable Player (MVP)"), ("roy", "Rookie of the Year"), ("dpoy", "Defensive Player of the Year"),
+          ("smoy", "Sixth Man of the Year"), ("mip", "Most Improved Player"), ("coy", "Coach of the Year"),
+          ("ppg", "Scoring leader (points per game)")]
+PTS_AWARD = 2
+
+def norm_name(text):
+    """'  Nikola  Jokić ' and 'nikola jokic' compare equal: lower-case, no accents, punctuation as spaces."""
+    t = unicodedata.normalize("NFKD", text or "")
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", t.lower()).split())
+
+def award_points(picks, results):
+    """picks / results: {award_key: text}. A result may list several winners separated by ';' (ties)."""
+    pts = 0
+    for key, _ in AWARDS:
+        pick = norm_name(picks.get(key, ""))
+        winners = {norm_name(w) for w in (results.get(key) or "").split(";")} - {""}
+        if pick and pick in winners:
+            pts += PTS_AWARD
+    return pts
+
+def award_results():
+    return {r.award: r.winner for r in db().execute("SELECT award, winner FROM award_results").fetchall()}
+
 def leaderboard(actual):
-    rows = db().execute("SELECT u.name, p.east, p.west, p.updated FROM users u JOIN predictions p ON p.email = u.email").fetchall()
+    d = db()
+    rows = d.execute("SELECT u.email, u.name, p.east, p.west, p.updated FROM users u JOIN predictions p ON p.email = u.email").fetchall()
+    picks = {}
+    for r in d.execute("SELECT email, award, pick FROM award_picks").fetchall():
+        picks.setdefault(r.email, {})[r.award] = r.pick
+    results = award_results()
     board = []
     for r in rows:
         late = days_late(r.updated)                 # updated = submission time (picks can't be edited)
         raw = compute_score(json.loads(r.east), json.loads(r.west), actual["E"], actual["W"])
-        board.append((r.name, raw - late, late))
+        aw = award_points(picks.get(r.email, {}), results)
+        board.append((r.name, raw + aw - late, late, aw))
     return sorted(board, key=lambda x: (-x[1], x[0].lower()))
 
 # ---------- standings provider (ESPN's public JSON feed, no API key; swap this one function to change provider) ----------
@@ -220,6 +255,12 @@ def send_reset(email, password_hash):
                      f"Use this link to choose a new password (valid for 1 hour, works once):\n\n{link}\n\n"
                      "If you didn't ask for this, you can ignore this email.\n")
 
+# ---------- admin (enter the official award winners) ----------
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+def is_admin():
+    return bool(session.get("email")) and session["email"] in ADMIN_EMAILS
+
 # ---------- pages ----------
 LAYOUT = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>NBA Predictions</title>
@@ -235,7 +276,7 @@ table{width:100%;border-collapse:collapse}td,th{padding:4px 6px;border-bottom:1p
 nav{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px}
 .muted{color:#666;font-size:.9rem}
 </style></head><body>
-<nav><a href="/"><b>NBA Predictions</b></a>{% if name %}<span><a href="/standings">Standings</a> · <a href="/predict">My picks</a> · {{ name }} · <a href="/logout">Log out</a></span>{% endif %}</nav>
+<nav><a href="/"><b>NBA Predictions</b></a>{% if name %}<span><a href="/standings">Standings</a> · <a href="/predict">My picks</a>{% if admin %} · <a href="/admin">Admin</a>{% endif %} · {{ name }} · <a href="/logout">Log out</a></span>{% endif %}</nav>
 {% for m in get_flashed_messages() %}<div class="msg">{{ m }}</div>{% endfor %}
 {{ body|safe }}</body></html>"""
 
@@ -261,6 +302,13 @@ RESET = """<h1>Choose a new password</h1>
 <div class="row"><input type="password" name="password" placeholder="New password (8+ characters)" minlength="8" required autocomplete="new-password"></div>
 <button>Set password</button></fieldset></form>"""
 
+ADMIN = """<h1>Award winners</h1>
+<p class="muted">Enter the official winners once they are announced. Leave a field empty if not decided yet. For a tie, separate the names with a semicolon (Name A; Name B). Scores update immediately.</p>
+<form method="post"><fieldset><legend>Official winners</legend>
+{% for key, label in awards %}<div class="row"><label for="{{ key }}" style="flex:0 0 14em">{{ label }}</label>
+<input id="{{ key }}" name="{{ key }}" maxlength="200" value="{{ results.get(key, '') }}"></div>{% endfor %}
+<button>Save winners</button></fieldset></form>"""
+
 PREDICT = """<h1>My predicted standings</h1>
 {% if submitted %}<p><b>Your picks were submitted on {{ submitted_at.strftime('%Y-%m-%d %H:%M') }} UTC and are final.</b></p>{% endif %}
 {% if start %}<p class="muted">Season starts {{ start.strftime('%Y-%m-%d %H:%M') }} UTC; new picks close {{ lock.strftime('%Y-%m-%d %H:%M') }} UTC.
@@ -274,6 +322,11 @@ Picks submitted after the season starts lose 1 point per day late (max 5).
 <select name="{{ p }}{{ i }}" required {{ 'disabled' if locked or submitted }}><option value="">Choose a team…</option>
 {% for t in teams %}<option {{ 'selected' if saved[p][i-1] == t }}>{{ t }}</option>{% endfor %}</select></div>{% endfor %}
 </fieldset>{% endfor %}
+<fieldset><legend>Individual awards (2 points each)</legend>
+<p class="muted">Type the full name. Capitals and accents don't matter, spelling does.</p>
+{% for key, label in awards %}<div class="row"><label for="a_{{ key }}" style="flex:0 0 14em">{{ label }}</label>
+<input id="a_{{ key }}" name="a_{{ key }}" maxlength="100" value="{{ saved_awards.get(key, '') }}" required {{ 'disabled' if locked or submitted }}></div>{% endfor %}
+</fieldset>
 {% if not locked and not submitted %}<button>Submit predictions</button>{% endif %}</form>
 <script>
 // Disable a team in other dropdowns once it's picked, so each team is used once per conference.
@@ -295,13 +348,16 @@ STANDINGS = """<h1>Standings</h1>
 {% else %}<tr><td class="muted">No data yet</td></tr>{% endfor %}</table></div>{% endfor %}
 </div>
 <h2>Leaderboard</h2>
-<p class="muted">Per team: top 10 (playoff/play-in zone): exact spot = 6 points, right zone but wrong spot = 3. Spots 11-15: exact spot = 3 points, right zone but wrong spot = 1. Picks submitted after the season starts lose 1 point per day late (max 5). Picks can't be changed once submitted.</p>
-<table><tr><th>#</th><th>Player</th><th>Score</th><th>Late penalty</th></tr>
-{% for n, s, late in board %}<tr><td>{{ loop.index }}</td><td>{{ n }}</td><td>{{ s }}</td><td class="muted">{% if late %}-{{ late }}{% endif %}</td></tr>{% endfor %}</table>"""
+<p class="muted">Per team: top 10 (playoff/play-in zone): exact spot = 6 points, right zone but wrong spot = 3. Spots 11-15: exact spot = 3 points, right zone but wrong spot = 1. Each correct individual award = 2 points (7 awards). Picks submitted after the season starts lose 1 point per day late (max 5). Picks can't be changed once submitted.</p>
+<table><tr><th>#</th><th>Player</th><th>Score</th><th>Awards</th><th>Late penalty</th></tr>
+{% for n, s, late, aw in board %}<tr><td>{{ loop.index }}</td><td>{{ n }}</td><td>{{ s }}</td><td class="muted">{% if aw %}+{{ aw }}{% endif %}</td><td class="muted">{% if late %}-{{ late }}{% endif %}</td></tr>{% endfor %}</table>
+<h2>Individual awards</h2>
+{% if results %}<table>{% for key, label in awards %}<tr><td>{{ label }}</td><td>{{ results.get(key) or 'to be announced' }}</td></tr>{% endfor %}</table>
+{% else %}<p class="muted">Winners will appear here once they are announced.</p>{% endif %}"""
 
 def page(tpl, **ctx):
     body = render_template_string(tpl, **ctx)
-    return render_template_string(LAYOUT, body=body, name=session.get("name"))
+    return render_template_string(LAYOUT, body=body, name=session.get("name"), admin=is_admin())
 
 def login_required(f):
     @wraps(f)
@@ -459,18 +515,28 @@ def predict():
         if sorted(east) != sorted(EAST) or sorted(west) != sorted(WEST):
             flash("Each of the 15 teams must be picked exactly once in each conference.")
             return redirect("/predict")
+        awards = {k: " ".join(request.form.get("a_" + k, "").split()) for k, _ in AWARDS}   # trim, collapse spaces
+        if any(not v or len(v) > 100 for v in awards.values()):
+            flash("Fill in every award (names up to 100 characters).")
+            return redirect("/predict")
+        d = db()
         try:                                        # INSERT only; the primary key (email) guarantees one submission
-            db().execute("INSERT INTO predictions(email, east, west) VALUES(?,?,?)",
-                         (email, json.dumps(east), json.dumps(west)))
-            db().commit()
+            d.execute("DELETE FROM award_picks WHERE email=?", (email,))     # leftovers of a deleted account, if any
+            d.execute("INSERT INTO predictions(email, east, west) VALUES(?,?,?)",
+                      (email, json.dumps(east), json.dumps(west)))
+            for k, v in awards.items():
+                d.execute("INSERT INTO award_picks(email, award, pick) VALUES(?,?,?)", (email, k, v))
+            d.commit()                              # picks and awards are saved together or not at all
         except pyodbc.IntegrityError:               # double click or second tab: the first submit wins
+            d.rollback()
             flash("You've already submitted your picks. They can't be changed.")
             return redirect("/predict")
         late = days_late(datetime.now(timezone.utc))
         flash("Submitted! Your picks are final." + (f" Submitted {late} day(s) late: -{late} point(s)." if late else ""))
         return redirect("/standings")
     saved = {"e": json.loads(row.east), "w": json.loads(row.west)} if row else {"e": [""] * 15, "w": [""] * 15}
-    return page(PREDICT, saved=saved, confs=[("Eastern", "e", EAST), ("Western", "w", WEST)],
+    saved_awards = {r.award: r.pick for r in db().execute("SELECT award, pick FROM award_picks WHERE email=?", (email,)).fetchall()} if row else {}
+    return page(PREDICT, saved=saved, saved_awards=saved_awards, awards=AWARDS, confs=[("Eastern", "e", EAST), ("Western", "w", WEST)],
                 start=season_start(), lock=lock_time(), locked=is_locked(), late_now=days_late(datetime.now(timezone.utc)),
                 submitted=row is not None, submitted_at=row.updated if row else None)
 
@@ -485,7 +551,26 @@ def standings():
     rows = db().execute("SELECT conf, pos, team, wins, losses, updated FROM standings ORDER BY conf, pos").fetchall()
     tables = {"E": [r for r in rows if r.conf == "E"], "W": [r for r in rows if r.conf == "W"]}
     actual = {k: [r.team for r in v] for k, v in tables.items()}
-    return page(STANDINGS, tables=tables, updated=rows[0].updated if rows else None, board=leaderboard(actual))
+    return page(STANDINGS, tables=tables, updated=rows[0].updated if rows else None, board=leaderboard(actual),
+                results=award_results(), awards=AWARDS)
+
+@app.route("/admin", methods=["GET", "POST"])
+@login_required
+def admin():
+    if not is_admin():
+        return "Not found", 404                     # don't reveal that the page exists
+    if request.method == "POST":
+        d = db()
+        for key, _ in AWARDS:
+            val = " ".join(request.form.get(key, "").split())[:200]
+            if not val:
+                d.execute("DELETE FROM award_results WHERE award=?", (key,))
+            elif d.execute("UPDATE award_results SET winner=?, updated=SYSUTCDATETIME() WHERE award=?", (val, key)).rowcount == 0:
+                d.execute("INSERT INTO award_results(award, winner) VALUES(?,?)", (key, val))
+        d.commit()
+        flash("Winners saved.")
+        return redirect("/admin")
+    return page(ADMIN, results=award_results(), awards=AWARDS)
 
 @app.get("/logout")
 def logout():
