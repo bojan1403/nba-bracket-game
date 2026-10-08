@@ -36,6 +36,15 @@ T = {
     "nav.brand": "NBA Kostur",
     "nav.standings": "Tabela",
     "nav.mypicks": "Moj kostur",
+    "nav.rules": "Pravila",
+    "nav.picks": "Kosturi",
+    "rules.title": "Pravila",
+    "picks.title": "Kosturi",
+    "picks.legend": "Poređenje sa trenutnom NBA tabelom:",
+    "picks.exact": "tačno mesto",
+    "picks.zone": "prava zona",
+    "picks.none": "Još niko nije poslao kostur.",
+    "msg.picks.submitfirst": "Tuđe kosture možeš da vidiš tek kad pošalješ svoj.",
     "nav.admin": "Admin",
     "nav.logout": "Odjavi se",
     "footer": "Independent fan project, not affiliated with, endorsed by, or sponsored by the National Basketball Association or any of its teams. Team and player names are used only to identify them. Standings come from public sources and may contain errors.",
@@ -280,20 +289,37 @@ def award_points(picks, results):
 def award_results():
     return {r.award: r.winner for r in db().execute("SELECT award, winner FROM award_results").fetchall()}
 
-def leaderboard(actual):
+def team_marks(pred, actual):
+    """Per predicted team: 'exact', 'zone' (right zone, wrong spot) or '' (miss / standings not loaded). Same rules as score_conference."""
+    out = []
+    for i, team in enumerate(pred, start=1):
+        j = actual.index(team) + 1 if team in actual else 0
+        out.append("" if not j else "exact" if j == i else "zone" if (i <= ZONE) == (j <= ZONE) else "")
+    return out
+
+def entries(actual):
+    """Everyone who submitted, best first: score parts, their picks and how each pick is doing."""
     d = db()
     rows = d.execute("SELECT u.email, u.name, p.east, p.west, p.updated FROM users u JOIN predictions p ON p.email = u.email").fetchall()
     picks = {}
     for r in d.execute("SELECT email, award, pick FROM award_picks").fetchall():
         picks.setdefault(r.email, {})[r.award] = r.pick
     results = award_results()
-    board = []
+    out = []
     for r in rows:
+        east, west = json.loads(r.east), json.loads(r.west)
         late = days_late(r.updated)                 # updated = submission time (picks can't be edited)
-        raw = compute_score(json.loads(r.east), json.loads(r.west), actual["E"], actual["W"])
-        aw = award_points(picks.get(r.email, {}), results)
-        board.append((r.name, raw + aw - late, late, aw))
-    return sorted(board, key=lambda x: (-x[1], x[0].lower()))
+        raw = compute_score(east, west, actual["E"], actual["W"])
+        mine = picks.get(r.email, {})
+        aw = award_points(mine, results)
+        hit = {k: norm_name(mine.get(k, "")) in ({norm_name(w) for w in (results.get(k) or "").split(";")} - {""}) for k, _ in AWARDS}
+        out.append(dict(email=r.email, name=r.name, total=raw + aw - late, late=late, aw=aw,
+                        east=list(zip(east, team_marks(east, actual["E"]))), west=list(zip(west, team_marks(west, actual["W"]))),
+                        awards=[(k, mine.get(k, ""), hit[k]) for k, _ in AWARDS]))
+    return sorted(out, key=lambda e: (-e["total"], e["name"].lower()))
+
+def leaderboard(actual):
+    return [(e["name"], e["total"], e["late"], e["aw"]) for e in entries(actual)]
 
 # ---------- standings provider (ESPN's public JSON feed, no API key; swap this one function to change provider) ----------
 ESPN_URL = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
@@ -415,9 +441,11 @@ button{padding:10px 18px;font:inherit;font-weight:600;cursor:pointer}
 table{width:100%;border-collapse:collapse}td,th{padding:4px 6px;border-bottom:1px solid #eee;text-align:left}
 nav{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px}
 .muted{color:#666;font-size:.9rem}
+details{border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin:8px 0}summary{cursor:pointer;font-weight:600}
+ol.picks{margin:8px 0;padding-left:2.2em}.exact{background:#d4edda}.zone{background:#fff3cd}.mine{border-color:#e8590c}
 footer{margin-top:32px;padding-top:12px;border-top:1px solid #eee;color:#666;font-size:.8rem}
 </style></head><body>
-<nav><a href="/"><b>{{ t('nav.brand') }}</b></a>{% if name %}<span><a href="/standings">{{ t('nav.standings') }}</a> · <a href="/predict">{{ t('nav.mypicks') }}</a>{% if admin %} · <a href="/admin">{{ t('nav.admin') }}</a>{% endif %} · {{ name }} · <a href="/logout">{{ t('nav.logout') }}</a></span>{% endif %}</nav>
+<nav><a href="/"><b>{{ t('nav.brand') }}</b></a>{% if name %}<span><a href="/standings">{{ t('nav.standings') }}</a> · <a href="/predict">{{ t('nav.mypicks') }}</a> · <a href="/picks">{{ t('nav.picks') }}</a> · <a href="/rules">{{ t('nav.rules') }}</a>{% if admin %} · <a href="/admin">{{ t('nav.admin') }}</a>{% endif %} · {{ name }} · <a href="/logout">{{ t('nav.logout') }}</a></span>{% endif %}{% if not name %}<span><a href="/rules">{{ t('nav.rules') }}</a></span>{% endif %}</nav>
 {% for m in get_flashed_messages() %}<div class="msg">{{ m }}</div>{% endfor %}
 {{ body|safe }}
 <footer>{{ t('footer') }}</footer>
@@ -492,12 +520,25 @@ STANDINGS = """<h1>{{ t('st.title') }}</h1>
 {% else %}<tr><td class="muted">{{ t('st.nodata') }}</td></tr>{% endfor %}</table></div>{% endfor %}
 </div>
 <h2>{{ t('st.leaderboard') }}</h2>
-<p class="muted">{{ rules_text() }}</p>
 <table><tr><th>#</th><th>{{ t('st.col.player') }}</th><th>{{ t('st.col.score') }}</th><th>{{ t('st.col.awards') }}</th><th>{{ t('st.col.late') }}</th></tr>
 {% for n, s, late, aw in board %}<tr><td>{{ loop.index }}</td><td>{{ n }}</td><td>{{ s }}</td><td class="muted">{% if aw %}+{{ aw }}{% endif %}</td><td class="muted">{% if late %}-{{ late }}{% endif %}</td></tr>{% endfor %}</table>
 <h2>{{ t('st.awards.title') }}</h2>
 {% if results %}<table>{% for key, _ in awards %}<tr><td>{{ t('award.' + key) }}</td><td>{{ results.get(key) or t('st.awards.tba') }}</td></tr>{% endfor %}</table>
 {% else %}<p class="muted">{{ t('st.awards.empty') }}</p>{% endif %}"""
+
+RULES = """<h1>{{ t('rules.title') }}</h1>
+<ul>{% for k in ['rules.top10', 'rules.low', 'rules.awards', 'rules.late', 'rules.final'] %}<li>{{ t(k) }}</li>{% endfor %}</ul>
+<p>{{ t('rules.example') }}</p>"""
+
+PICKS = """<h1>{{ t('picks.title') }}</h1>
+<p class="muted">{{ t('picks.legend') }} <span class="exact">&nbsp;{{ t('picks.exact') }}&nbsp;</span> <span class="zone">&nbsp;{{ t('picks.zone') }}&nbsp;</span></p>
+{% for e in entries %}<details{% if e.email == me %} open class="mine"{% endif %}>
+<summary>{{ loop.index }}. {{ e.name }} — {{ plural(e.total, 'point') }}</summary>
+<div class="two">{% for title, rows in [(t('conf.east'), e.east), (t('conf.west'), e.west)] %}
+<div><h2>{{ title }}</h2><ol class="picks">{% for team, mark in rows %}<li class="{{ mark }}">{{ team }}</li>{% endfor %}</ol></div>{% endfor %}</div>
+<table>{% for key, pick, hit in e.awards %}<tr><td>{{ t('award.' + key) }}</td><td{% if hit %} class="exact"{% endif %}>{{ pick }}</td></tr>{% endfor %}</table>
+</details>
+{% else %}<p class="muted">{{ t('picks.none') }}</p>{% endfor %}"""
 
 def page(tpl, **ctx):
     body = render_template_string(tpl, contact=CONTACT_EMAIL, **ctx)
@@ -697,6 +738,20 @@ def standings():
     actual = {k: [r.team for r in v] for k, v in tables.items()}
     return page(STANDINGS, tables=tables, updated=rows[0].updated if rows else None, board=leaderboard(actual),
                 results=award_results(), awards=AWARDS)
+
+@app.get("/rules")
+def rules():
+    return page(RULES)
+
+@app.get("/picks")
+@login_required
+def picks():
+    if not has_prediction(session["email"]) and not is_locked():     # no peeking before you've committed to your own picks
+        flash(t("msg.picks.submitfirst"))
+        return redirect("/predict")
+    rows = db().execute("SELECT conf, pos, team FROM standings ORDER BY conf, pos").fetchall()
+    actual = {k: [r.team for r in rows if r.conf == k] for k in ("E", "W")}
+    return page(PICKS, entries=entries(actual), me=session["email"])
 
 @app.route("/admin", methods=["GET", "POST"])
 @login_required
