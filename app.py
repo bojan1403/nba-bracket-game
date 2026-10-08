@@ -1,6 +1,7 @@
 import hmac, json, math, os, re, smtplib, unicodedata, urllib.request
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from functools import wraps
 import pyodbc
 from flask import Flask, request, session, redirect, render_template_string, flash, g
@@ -26,6 +27,139 @@ WEST = ["Dallas Mavericks", "Denver Nuggets", "Golden State Warriors", "Houston 
         "Los Angeles Lakers", "Memphis Grizzlies", "Minnesota Timberwolves", "New Orleans Pelicans",
         "Oklahoma City Thunder", "Phoenix Suns", "Portland Trail Blazers", "Sacramento Kings",
         "San Antonio Spurs", "Utah Jazz"]
+
+# ---------- texts shown to players (from NBA_Predictions_Serbian_texts.docx; footer, privacy note and award names are kept in English) ----------
+T = {
+    "forms.day": "dan / dana / dana",
+    "forms.point": "poen / poena / poena",
+    "forms.minute": "minut / minuta / minuta",
+    "nav.brand": "NBA Kostur",
+    "nav.standings": "Tabela",
+    "nav.mypicks": "Moj kostur",
+    "nav.admin": "Admin",
+    "nav.logout": "Odjavi se",
+    "footer": "Independent fan project, not affiliated with, endorsed by, or sponsored by the National Basketball Association or any of its teams. Team and player names are used only to identify them. Standings come from public sources and may contain errors.",
+    "conf.east": "Istok",
+    "conf.west": "Zapad",
+    "home.title": "Pogodi konačnu NBA tabelu",
+    "home.intro": "Poređaj svih 30 timova, od 1. do 15. mesta u Istočnoj i od 1. do 15. mesta u Zapadnoj konferenciji, i vidi kako stojiš u odnosu na ostale.",
+    "home.reg.legend": "Napravi nalog",
+    "home.reg.name": "Ime za prikaz",
+    "home.email": "E-mail",
+    "home.reg.password": "Lozinka (najmanje 8 karaktera)",
+    "home.reg.button": "Registruj se",
+    "home.privacy": "We store your display name, email address, a hashed password and your predictions, only to run this game, and we don’t share them.",
+    "home.privacy.contact": "To have your data deleted, write to {contact}.",
+    "home.login.legend": "Prijavi se",
+    "home.login.password": "Lozinka",
+    "home.login.button": "Prijavi se",
+    "home.forgot.summary": "Zaboravljena lozinka?",
+    "home.forgot.email": "Tvoj e-mail",
+    "home.forgot.button": "Pošalji link za novu lozinku",
+    "home.resend.summary": "Nije stigao e-mail za potvrdu?",
+    "home.resend.button": "Pošalji ponovo",
+    "msg.login_required": "Prvo se prijavi.",
+    "msg.register.invalid": "Unesi ime za prikaz, ispravnu e-mail adresu i lozinku od 8 do 200 karaktera.",
+    "msg.register.exists": "Ta e-mail adresa je već registrovana. Prijavi se ili resetuj lozinku.",
+    "msg.register.sent": "Još malo! Poslali smo link za potvrdu na {email}. Klikni na njega da aktiviraš nalog.",
+    "msg.register.mailfail": "Nalog je napravljen, ali nismo uspeli da pošaljemo e-mail za potvrdu. Probaj opciju „Nije stigao e-mail za potvrdu?“ ispod.",
+    "msg.login.wrong": "Pogrešan e-mail ili lozinka.",
+    "msg.login.unverified": "Prvo potvrdi e-mail (proveri mail) ili zatraži novi link ispod.",
+    "msg.login.locknow": "Previše neuspešnih pokušaja. Nalog je zaključan na {minutes}. Možeš i da resetuješ lozinku.",
+    "msg.login.locked": "Previše neuspešnih pokušaja. Probaj ponovo za {minutes} ili resetuj lozinku.",
+    "msg.verify.invalid": "Link za potvrdu nije ispravan ili je istekao. Zatraži novi ispod.",
+    "msg.verify.noaccount": "Taj nalog više ne postoji.",
+    "msg.resend.done": "Ako je ta adresa registrovana i još nije potvrđena, poslali smo novi link.",
+    "msg.forgot.done": "Ako je ta adresa registrovana, poslali smo link za resetovanje lozinke.",
+    "reset.title": "Izaberi novu lozinku",
+    "reset.legend": "Nova lozinka",
+    "reset.placeholder": "Nova lozinka (najmanje 8 karaktera)",
+    "reset.button": "Sačuvaj lozinku",
+    "msg.reset.invalid": "Link za resetovanje nije ispravan ili je istekao. Zatraži novi.",
+    "msg.reset.length": "Lozinka mora imati od 8 do 200 karaktera.",
+    "msg.reset.done": "Lozinka je promenjena. Sada možeš da se prijaviš.",
+    "email.verify.subject": "Potvrdi svoj e-mail",
+    "email.verify.body": "Dobrodošli u igru! Potvrdi svoj e-mail da aktiviraš nalog (link važi 24 sata):\n\n{link}",
+    "email.reset.subject": "Resetovanje lozinke",
+    "email.reset.body": "Iskoristi ovaj link da izabereš novu lozinku (važi 1 sat i može se upotrebiti samo jednom):\n\n{link}\n\nAko resetovanje lozinke nije tvoj zahtev, slobodno ignoriši ovaj e-mail.",
+    "predict.title": "Moj kostur",
+    "predict.submitted": "Tvoj kostur je poslat {date} i konačan je.",
+    "predict.season": "Sezona počinje {start}; nove kosture primamo do {lock}.",
+    "predict.penalty": "Prognoze poslate nakon početka sezone gube 1 poen za svaki dan kašnjenja (najviše 5).",
+    "predict.closed": "Prijem kostura je završen.",
+    "predict.latenow": "Ako pošalješ sada, kasniš {days} i gubiš {points}.",
+    "predict.finalhint": "Kad jednom pošalješ, kostur se ne može menjati.",
+    "predict.select": "Izaberi tim…",
+    "predict.awards.legend": "Individualne nagrade (po 2 poena)",
+    "predict.awards.hint": "Upiši puno ime. Potrudi se da upišeš tačno ime.",
+    "predict.button": "Pošalji kostur",
+    "predict.confirm": "Da li želiš da pošalješ kostur? Posle slanja nema izmena.",
+    "msg.predict.already": "Kostur je već poslat i ne može se menjati.",
+    "msg.predict.closed": "Prijem kostura je završen.",
+    "msg.predict.teams": "U svakoj konferenciji moraš izabrati svih 15 timova, svaki tačno jednom.",
+    "msg.predict.awards": "Popuni sve nagrade (imena do 100 karaktera).",
+    "msg.predict.ok": "Poslato! Tvoj kostur je konačan.",
+    "msg.predict.ok.late": "Poslato sa kašnjenjem od {days}: gubiš {points}.",
+    "rules.intro": "Bodovanje, po timu:",
+    "rules.top10": "Mesta 1–10 (plej-of / plej-in zona): tačno mesto = 6 poena, prava zona ali pogrešno mesto = 3 poena.",
+    "rules.low": "Mesta 11–15: tačno mesto = 3 poena, prava zona ali pogrešno mesto = 1 poen.",
+    "rules.awards": "Svaka tačno pogođena individualna nagrada = 2 poena (ukupno 7 nagrada).",
+    "rules.late": "Kostur poslat nakon početka sezone gubi 1 poen za svaki dan kašnjenja (najviše 5).",
+    "rules.final": "Kad se kostur pošalje, ne može se menjati.",
+    "rules.example": "Primer: LA Clippers staviš na 5. mesto Zapada. Ako završe na 5. mestu dobijaš 6 poena, na 7. mestu 3 poena, a na 12. mestu 0 poena.",
+    "st.title": "Tabela",
+    "st.updated": "NBA tabela poslednji put ažurirana: {date}",
+    "st.notloaded": "NBA tabela još nije učitana.",
+    "st.nodata": "Još nema podataka",
+    "st.leaderboard": "Rang lista",
+    "st.col.player": "Takmičar",
+    "st.col.score": "Poeni",
+    "st.col.awards": "Nagrade",
+    "st.col.late": "Kazna za kašnjenje",
+    "st.awards.title": "Individualne nagrade",
+    "st.awards.tba": "biće objavljeno",
+    "st.awards.empty": "Dobitnici će se pojaviti ovde čim budu proglašeni.",
+    "msg.st.fillfirst": "Prvo popuni svoj kostur.",
+    "msg.st.nopicks": "Prijem kostura je završen, a sa tvog naloga nije stigao nijedan, pa nisi na rang listi.",
+    "award.mvp": "Most Valuable Player (MVP)",
+    "award.roy": "Rookie of the Year",
+    "award.dpoy": "Defensive Player of the Year",
+    "award.smoy": "Sixth Man of the Year",
+    "award.mip": "Most Improved Player",
+    "award.coy": "Coach of the Year",
+    "award.ppg": "Scoring leader (points per game)",
+    "admin.title": "Dobitnici nagrada",
+    "admin.intro": "Unesi zvanične dobitnike kad budu proglašeni. Ostavi polje prazno ako još nije odlučeno. U slučaju izjednačenja, razdvoji imena tačkom i zarezom (Ime A; Ime B). Bodovi se ažuriraju odmah.",
+    "admin.legend": "Zvanični dobitnici",
+    "admin.button": "Sačuvaj dobitnike",
+    "msg.admin.ok": "Dobitnici su sačuvani.",
+}
+
+def plural(n, kind):
+    """'1 dan', '2 dana', '5 dana': the Serbian noun form after a number. kind = day | point | minute."""
+    forms = [f.strip() for f in T["forms." + kind].split("/")]
+    n = int(n)
+    last, last2 = n % 10, n % 100
+    i = 0 if (last == 1 and last2 != 11) else 1 if (2 <= last <= 4 and not 12 <= last2 <= 14) else 2
+    return f"{n} {forms[min(i, len(forms) - 1)]}"
+
+def t(key, **kw):
+    """Text by id; {placeholders} are filled from the keyword arguments."""
+    s = T[key]
+    for k, v in kw.items():
+        s = s.replace("{" + k + "}", str(v))
+    return s
+
+def fmt_dt(d):
+    if d.tzinfo is None:                            # SQL returns naive UTC datetimes
+        d = d.replace(tzinfo=timezone.utc)
+    return d.astimezone(LOCAL_TZ).strftime("%d.%m.%Y. %H:%M")
+
+def rules_text():
+    keys = ("rules.intro", "rules.top10", "rules.low", "rules.awards", "rules.late", "rules.final", "rules.example")
+    return " ".join(T[k] for k in keys if T.get(k))
+
+app.jinja_env.globals.update(t=t, plural=plural, fmt_dt=fmt_dt, rules_text=rules_text)
 
 # ---------- database (Azure SQL via the AZURE_SQL_CONN app setting) ----------
 SCHEMA = """
@@ -62,14 +196,15 @@ def close_db(_):
         d.close()
 
 # ---------- season start, lock and late penalty ----------
+LOCAL_TZ = ZoneInfo("Europe/Belgrade")                  # all times shown to users; handles summer/winter time
 LOCK_DAYS = 5                                       # picks lock 5 days after the season starts
 
 def season_start():
-    v = os.environ.get("SEASON_START")              # UTC, e.g. 2026-10-20T23:00:00Z ; unset = no lock, no penalty
+    v = os.environ.get("SEASON_START")              # e.g. 2026-10-21T01:00:00 (Belgrade time) or 2026-10-20T23:00:00Z; unset = no lock, no penalty
     if not v:
         return None
     t = datetime.fromisoformat(v.replace("Z", "+00:00"))
-    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    return (t if t.tzinfo else t.replace(tzinfo=LOCAL_TZ)).astimezone(timezone.utc)   # no zone given = Belgrade time; kept in UTC so 5 days = exactly 120 h
 
 def lock_time():
     s = season_start()
@@ -119,11 +254,18 @@ AWARDS = [("mvp", "Most Valuable Player (MVP)"), ("roy", "Rookie of the Year"), 
           ("ppg", "Scoring leader (points per game)")]
 PTS_AWARD = 2
 
+CYR = dict(zip("абвгдђежзијклљмнњопрстћуфхцчџш",
+               ["a", "b", "v", "g", "d", "dj", "e", "z", "z", "i", "j", "k", "l", "lj", "m", "n", "nj", "o", "p", "r", "s", "t", "c", "u", "f", "h", "c", "c", "dz", "s"]))
+EXTRA = {"đ": "dj", "ł": "l", "ø": "o", "æ": "ae", "ß": "ss"}
+
 def norm_name(text):
-    """'  Nikola  Jokić ' and 'nikola jokic' compare equal: lower-case, no accents, punctuation as spaces."""
-    t = unicodedata.normalize("NFKD", text or "")
-    t = "".join(ch for ch in t if not unicodedata.combining(ch))
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", t.lower()).split())
+    """'  Nikola  Jokić ', 'nikola jokic' and 'Никола Јокић' compare equal: lower-case, Cyrillic to Latin,
+    no accents, punctuation as spaces."""
+    low = (text or "").lower()
+    low = "".join(CYR.get(ch) or EXTRA.get(ch) or ch for ch in low)
+    low = unicodedata.normalize("NFKD", low)
+    low = "".join(ch for ch in low if not unicodedata.combining(ch))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", low).split())
 
 def award_points(picks, results):
     """picks / results: {award_key: text}. A result may list several winners separated by ';' (ties)."""
@@ -245,15 +387,12 @@ def may_send(email):
 
 def send_verification(email):
     link = abs_link("/verify/" + ser_verify.dumps(email))
-    return send_mail(email, "Confirm your email",
-                     f"Welcome! Confirm your email to activate your account (link valid for 24 hours):\n\n{link}\n")
+    return send_mail(email, t("email.verify.subject"), t("email.verify.body", link=link) + "\n")
 
 def send_reset(email, password_hash):
     # The token carries the tail of the current password hash, so it stops working once the password changes.
     link = abs_link("/reset/" + ser_reset.dumps([email, password_hash[-16:]]))
-    return send_mail(email, "Reset your password",
-                     f"Use this link to choose a new password (valid for 1 hour, works once):\n\n{link}\n\n"
-                     "If you didn't ask for this, you can ignore this email.\n")
+    return send_mail(email, t("email.reset.subject"), t("email.reset.body", link=link) + "\n")
 
 # ---------- admin (enter the official award winners) ----------
 CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "").strip()   # shown in the privacy note; optional
@@ -263,8 +402,8 @@ def is_admin():
     return bool(session.get("email")) and session["email"] in ADMIN_EMAILS
 
 # ---------- pages ----------
-LAYOUT = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>NBA Predictions</title>
+LAYOUT = """<!doctype html><html lang="sr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ t('nav.brand') }}</title>
 <style>
 body{font:16px/1.5 system-ui,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#1a1a1a}
 fieldset{margin:0 0 16px;padding:12px 16px;border:1px solid #ccc;border-radius:8px}
@@ -278,61 +417,61 @@ nav{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bot
 .muted{color:#666;font-size:.9rem}
 footer{margin-top:32px;padding-top:12px;border-top:1px solid #eee;color:#666;font-size:.8rem}
 </style></head><body>
-<nav><a href="/"><b>NBA Predictions</b></a>{% if name %}<span><a href="/standings">Standings</a> · <a href="/predict">My picks</a>{% if admin %} · <a href="/admin">Admin</a>{% endif %} · {{ name }} · <a href="/logout">Log out</a></span>{% endif %}</nav>
+<nav><a href="/"><b>{{ t('nav.brand') }}</b></a>{% if name %}<span><a href="/standings">{{ t('nav.standings') }}</a> · <a href="/predict">{{ t('nav.mypicks') }}</a>{% if admin %} · <a href="/admin">{{ t('nav.admin') }}</a>{% endif %} · {{ name }} · <a href="/logout">{{ t('nav.logout') }}</a></span>{% endif %}</nav>
 {% for m in get_flashed_messages() %}<div class="msg">{{ m }}</div>{% endfor %}
 {{ body|safe }}
-<footer>Independent fan project, not affiliated with, endorsed by, or sponsored by the National Basketball Association or any of its teams. Team and player names are used only to identify them. Standings come from public sources and may contain errors.</footer>
+<footer>{{ t('footer') }}</footer>
 </body></html>"""
 
-HOME = """<h1>Predict the final NBA standings</h1>
-<p>Rank all 30 teams, 1 to 15 in the East and 1 to 15 in the West, and see how you stack up against everyone else.</p>
+HOME = """<h1>{{ t('home.title') }}</h1>
+<p>{{ t('home.intro') }}</p>
 <div class="two">
-<form method="post" action="/register"><fieldset><legend>Create account</legend>
-<div class="row"><input name="name" placeholder="Display name" maxlength="40" required></div>
-<div class="row"><input type="email" name="email" placeholder="Email" required autocomplete="email"></div>
-<div class="row"><input type="password" name="password" placeholder="Password (8+ characters)" minlength="8" required autocomplete="new-password"></div>
-<button>Register</button>
-<p class="muted">We store your display name, email address, a hashed password and your predictions, only to run this game, and we don't share them.{% if contact %} To have your data deleted, write to <a href="mailto:{{ contact }}">{{ contact }}</a>.{% endif %}</p></fieldset></form>
-<form method="post" action="/login"><fieldset><legend>Log in</legend>
-<div class="row"><input type="email" name="email" placeholder="Email" required autocomplete="email"></div>
-<div class="row"><input type="password" name="password" placeholder="Password" required autocomplete="current-password"></div>
-<button>Log in</button></fieldset></form></div>
-<details><summary>Forgot your password?</summary><form method="post" action="/forgot">
-<div class="row"><input type="email" name="email" placeholder="Your email" required><button>Send reset link</button></div></form></details>
-<details><summary>Didn't get the confirmation email?</summary><form method="post" action="/resend">
-<div class="row"><input type="email" name="email" placeholder="Your email" required><button>Send again</button></div></form></details>"""
+<form method="post" action="/register"><fieldset><legend>{{ t('home.reg.legend') }}</legend>
+<div class="row"><input name="name" placeholder="{{ t('home.reg.name') }}" maxlength="40" required></div>
+<div class="row"><input type="email" name="email" placeholder="{{ t('home.email') }}" required autocomplete="email"></div>
+<div class="row"><input type="password" name="password" placeholder="{{ t('home.reg.password') }}" minlength="8" required autocomplete="new-password"></div>
+<button>{{ t('home.reg.button') }}</button>
+<p class="muted">{{ t('home.privacy') }}{% if contact %} {% set pc = t('home.privacy.contact').split('{contact}') %}{{ pc[0] }}<a href="mailto:{{ contact }}">{{ contact }}</a>{{ pc[1] }}{% endif %}</p></fieldset></form>
+<form method="post" action="/login"><fieldset><legend>{{ t('home.login.legend') }}</legend>
+<div class="row"><input type="email" name="email" placeholder="{{ t('home.email') }}" required autocomplete="email"></div>
+<div class="row"><input type="password" name="password" placeholder="{{ t('home.login.password') }}" required autocomplete="current-password"></div>
+<button>{{ t('home.login.button') }}</button></fieldset></form></div>
+<details><summary>{{ t('home.forgot.summary') }}</summary><form method="post" action="/forgot">
+<div class="row"><input type="email" name="email" placeholder="{{ t('home.forgot.email') }}" required><button>{{ t('home.forgot.button') }}</button></div></form></details>
+<details><summary>{{ t('home.resend.summary') }}</summary><form method="post" action="/resend">
+<div class="row"><input type="email" name="email" placeholder="{{ t('home.forgot.email') }}" required><button>{{ t('home.resend.button') }}</button></div></form></details>"""
 
-RESET = """<h1>Choose a new password</h1>
-<form method="post"><fieldset><legend>New password</legend>
-<div class="row"><input type="password" name="password" placeholder="New password (8+ characters)" minlength="8" required autocomplete="new-password"></div>
-<button>Set password</button></fieldset></form>"""
+RESET = """<h1>{{ t('reset.title') }}</h1>
+<form method="post"><fieldset><legend>{{ t('reset.legend') }}</legend>
+<div class="row"><input type="password" name="password" placeholder="{{ t('reset.placeholder') }}" minlength="8" required autocomplete="new-password"></div>
+<button>{{ t('reset.button') }}</button></fieldset></form>"""
 
-ADMIN = """<h1>Award winners</h1>
-<p class="muted">Enter the official winners once they are announced. Leave a field empty if not decided yet. For a tie, separate the names with a semicolon (Name A; Name B). Scores update immediately.</p>
-<form method="post"><fieldset><legend>Official winners</legend>
-{% for key, label in awards %}<div class="row"><label for="{{ key }}" style="flex:0 0 14em">{{ label }}</label>
+ADMIN = """<h1>{{ t('admin.title') }}</h1>
+<p class="muted">{{ t('admin.intro') }}</p>
+<form method="post"><fieldset><legend>{{ t('admin.legend') }}</legend>
+{% for key, _ in awards %}<div class="row"><label for="{{ key }}" style="flex:0 0 14em">{{ t('award.' + key) }}</label>
 <input id="{{ key }}" name="{{ key }}" maxlength="200" value="{{ results.get(key, '') }}"></div>{% endfor %}
-<button>Save winners</button></fieldset></form>"""
+<button>{{ t('admin.button') }}</button></fieldset></form>"""
 
-PREDICT = """<h1>My predicted standings</h1>
-{% if submitted %}<p><b>Your picks were submitted on {{ submitted_at.strftime('%Y-%m-%d %H:%M') }} UTC and are final.</b></p>{% endif %}
-{% if start %}<p class="muted">Season starts {{ start.strftime('%Y-%m-%d %H:%M') }} UTC; new picks close {{ lock.strftime('%Y-%m-%d %H:%M') }} UTC.
-Picks submitted after the season starts lose 1 point per day late (max 5).
-{% if not submitted %}{% if locked %}<b>Picks are closed.</b>{% elif late_now %}<b>Submitting now is {{ late_now }} day(s) late: -{{ late_now }} point(s).</b>{% endif %}{% endif %}</p>{% endif %}
-{% if not submitted and not locked %}<p class="muted">Once you submit, your picks can't be changed.</p>{% endif %}
-<form method="post" onsubmit="return confirm('Submit your picks? They can\'t be changed afterwards.')">
+PREDICT = """<h1>{{ t('predict.title') }}</h1>
+{% if submitted %}<p><b>{{ t('predict.submitted', date=fmt_dt(submitted_at)) }}</b></p>{% endif %}
+{% if start %}<p class="muted">{{ t('predict.season', start=fmt_dt(start), lock=fmt_dt(lock)) }}
+{{ t('predict.penalty') }}
+{% if not submitted %}{% if locked %}<b>{{ t('predict.closed') }}</b>{% elif late_now %}<b>{{ t('predict.latenow', days=plural(late_now, 'day'), points=plural(late_now, 'point')) }}</b>{% endif %}{% endif %}</p>{% endif %}
+{% if not submitted and not locked %}<p class="muted">{{ t('predict.finalhint') }}</p>{% endif %}
+<form method="post" onsubmit='return confirm({{ t("predict.confirm")|tojson }})'>
 {% for title, p, teams in confs %}
-<fieldset><legend>{{ title }} Conference</legend>
+<fieldset><legend>{{ title }}</legend>
 {% for i in range(1, 16) %}<div class="row"><b>{{ i }}.</b>
-<select name="{{ p }}{{ i }}" required {{ 'disabled' if locked or submitted }}><option value="">Choose a team…</option>
-{% for t in teams %}<option {{ 'selected' if saved[p][i-1] == t }}>{{ t }}</option>{% endfor %}</select></div>{% endfor %}
+<select name="{{ p }}{{ i }}" required {{ 'disabled' if locked or submitted }}><option value="">{{ t('predict.select') }}</option>
+{% for t_ in teams %}<option {{ 'selected' if saved[p][i-1] == t_ }}>{{ t_ }}</option>{% endfor %}</select></div>{% endfor %}
 </fieldset>{% endfor %}
-<fieldset><legend>Individual awards (2 points each)</legend>
-<p class="muted">Type the full name. Capitals and accents don't matter, spelling does.</p>
-{% for key, label in awards %}<div class="row"><label for="a_{{ key }}" style="flex:0 0 14em">{{ label }}</label>
+<fieldset><legend>{{ t('predict.awards.legend') }}</legend>
+<p class="muted">{{ t('predict.awards.hint') }}</p>
+{% for key, _ in awards %}<div class="row"><label for="a_{{ key }}" style="flex:0 0 14em">{{ t('award.' + key) }}</label>
 <input id="a_{{ key }}" name="a_{{ key }}" maxlength="100" value="{{ saved_awards.get(key, '') }}" required {{ 'disabled' if locked or submitted }}></div>{% endfor %}
 </fieldset>
-{% if not locked and not submitted %}<button>Submit predictions</button>{% endif %}</form>
+{% if not locked and not submitted %}<button>{{ t('predict.button') }}</button>{% endif %}</form>
 <script>
 // Disable a team in other dropdowns once it's picked, so each team is used once per conference.
 document.querySelectorAll('fieldset').forEach(fs=>{
@@ -343,22 +482,22 @@ document.querySelectorAll('fieldset').forEach(fs=>{
 });
 </script>"""
 
-STANDINGS = """<h1>Standings</h1>
-{% if updated %}<p class="muted">NBA standings last updated {{ updated.strftime('%Y-%m-%d %H:%M') }} UTC</p>
-{% else %}<p class="muted">NBA standings haven't been loaded yet.</p>{% endif %}
+STANDINGS = """<h1>{{ t('st.title') }}</h1>
+{% if updated %}<p class="muted">{{ t('st.updated', date=fmt_dt(updated)) }}</p>
+{% else %}<p class="muted">{{ t('st.notloaded') }}</p>{% endif %}
 <div class="two">
-{% for title, key in [('Eastern', 'E'), ('Western', 'W')] %}
-<div><h2>{{ title }} Conference</h2><table>
+{% for title, key in [(t('conf.east'), 'E'), (t('conf.west'), 'W')] %}
+<div><h2>{{ title }}</h2><table>
 {% for r in tables[key] %}<tr><td>{{ r.pos }}</td><td>{{ r.team }}</td><td>{{ r.wins }}-{{ r.losses }}</td></tr>
-{% else %}<tr><td class="muted">No data yet</td></tr>{% endfor %}</table></div>{% endfor %}
+{% else %}<tr><td class="muted">{{ t('st.nodata') }}</td></tr>{% endfor %}</table></div>{% endfor %}
 </div>
-<h2>Leaderboard</h2>
-<p class="muted">Per team: top 10 (playoff/play-in zone): exact spot = 6 points, right zone but wrong spot = 3. Spots 11-15: exact spot = 3 points, right zone but wrong spot = 1. Each correct individual award = 2 points (7 awards). Picks submitted after the season starts lose 1 point per day late (max 5). Picks can't be changed once submitted.</p>
-<table><tr><th>#</th><th>Player</th><th>Score</th><th>Awards</th><th>Late penalty</th></tr>
+<h2>{{ t('st.leaderboard') }}</h2>
+<p class="muted">{{ rules_text() }}</p>
+<table><tr><th>#</th><th>{{ t('st.col.player') }}</th><th>{{ t('st.col.score') }}</th><th>{{ t('st.col.awards') }}</th><th>{{ t('st.col.late') }}</th></tr>
 {% for n, s, late, aw in board %}<tr><td>{{ loop.index }}</td><td>{{ n }}</td><td>{{ s }}</td><td class="muted">{% if aw %}+{{ aw }}{% endif %}</td><td class="muted">{% if late %}-{{ late }}{% endif %}</td></tr>{% endfor %}</table>
-<h2>Individual awards</h2>
-{% if results %}<table>{% for key, label in awards %}<tr><td>{{ label }}</td><td>{{ results.get(key) or 'to be announced' }}</td></tr>{% endfor %}</table>
-{% else %}<p class="muted">Winners will appear here once they are announced.</p>{% endif %}"""
+<h2>{{ t('st.awards.title') }}</h2>
+{% if results %}<table>{% for key, _ in awards %}<tr><td>{{ t('award.' + key) }}</td><td>{{ results.get(key) or t('st.awards.tba') }}</td></tr>{% endfor %}</table>
+{% else %}<p class="muted">{{ t('st.awards.empty') }}</p>{% endif %}"""
 
 def page(tpl, **ctx):
     body = render_template_string(tpl, contact=CONTACT_EMAIL, **ctx)
@@ -368,7 +507,7 @@ def login_required(f):
     @wraps(f)
     def wrapper(*a, **k):
         if not session.get("email"):
-            flash("Please log in first.")
+            flash(t("msg.login_required"))
             return redirect("/")
         return f(*a, **k)
     return wrapper
@@ -394,20 +533,20 @@ def register():
     name = request.form["name"].strip()
     pw = request.form["password"]
     if "@" not in email or len(email) > 254 or not 1 <= len(name) <= 40 or not 8 <= len(pw) <= 200:
-        flash("Enter a display name, a valid email, and a password of 8 to 200 characters.")
+        flash(t("msg.register.invalid"))
         return redirect("/")
     try:
         db().execute("INSERT INTO users(email, name, password_hash, verified) VALUES(?,?,?,0)",
                      (email, name, generate_password_hash(pw)))
         db().commit()
     except pyodbc.IntegrityError:                   # email is the primary key
-        flash("That email is already registered. Please log in or reset your password.")
+        flash(t("msg.register.exists"))
         return redirect("/")
     may_send(email)                                 # starts the 60 s throttle for this address
     if send_verification(email):
-        flash(f"Almost there! We sent a confirmation link to {email}. Click it to activate your account.")
+        flash(t("msg.register.sent", email=email))
     else:
-        flash("Account created, but we couldn't send the confirmation email. Use \"Didn't get the confirmation email?\" below.")
+        flash(t("msg.register.mailfail"))
     return redirect("/")
 
 LOGIN_MAX_FAILS = 5                                 # consecutive failed logins before the account locks
@@ -421,7 +560,7 @@ def login():
         "CASE WHEN locked_until > SYSUTCDATETIME() THEN DATEDIFF(minute, SYSUTCDATETIME(), locked_until) + 1 ELSE 0 END AS lock_min "
         "FROM users WHERE email=?", (email,)).fetchone()
     if row and row.lock_min:                        # locked: don't even test the password
-        flash(f"Too many failed attempts. Try again in {row.lock_min} minute(s), or reset your password.")
+        flash(t("msg.login.locked", minutes=plural(row.lock_min, "minute")))
         return redirect("/")
     if not row or not check_password_hash(row.password_hash, request.form["password"]):
         if row:
@@ -433,15 +572,15 @@ def login():
                          "WHERE email=?", (LOGIN_MAX_FAILS, LOGIN_MAX_FAILS, LOCKOUT_MINUTES, email))
             db().commit()
         if row and row.failed_logins + 1 >= LOGIN_MAX_FAILS:
-            flash(f"Too many failed attempts. This account is locked for {LOCKOUT_MINUTES} minutes. You can also reset your password.")
+            flash(t("msg.login.locknow", minutes=plural(LOCKOUT_MINUTES, "minute")))
         else:
-            flash("Wrong email or password.")
+            flash(t("msg.login.wrong"))
         return redirect("/")
     if row.failed_logins:                           # correct password: the streak of failures is over
         db().execute("UPDATE users SET failed_logins=0, locked_until=NULL WHERE email=?", (email,))
         db().commit()
     if not row.verified:
-        flash("Please confirm your email first (check your inbox), or request a new link below.")
+        flash(t("msg.login.unverified"))
         return redirect("/")
     start_session(email, row.name)
     return landing()
@@ -451,11 +590,11 @@ def verify(token):
     try:
         email = ser_verify.loads(token, max_age=86400)
     except BadSignature:                            # also covers expired tokens
-        flash("That confirmation link is invalid or expired. Request a new one below.")
+        flash(t("msg.verify.invalid"))
         return redirect("/")
     row = db().execute("SELECT name FROM users WHERE email=?", (email,)).fetchone()
     if not row:
-        flash("That account no longer exists.")
+        flash(t("msg.verify.noaccount"))
         return redirect("/")
     db().execute("UPDATE users SET verified=1 WHERE email=?", (email,))
     db().commit()
@@ -468,7 +607,7 @@ def resend():
     row = db().execute("SELECT verified FROM users WHERE email=?", (email,)).fetchone()
     if row and not row.verified and may_send(email):
         send_verification(email)
-    flash("If that address is registered and not yet confirmed, we've sent a new link.")   # same answer either way
+    flash(t("msg.resend.done"))   # same answer either way
     return redirect("/")
 
 @app.post("/forgot")
@@ -477,12 +616,12 @@ def forgot():
     row = db().execute("SELECT password_hash FROM users WHERE email=?", (email,)).fetchone()
     if row and may_send(email):
         send_reset(email, row.password_hash)
-    flash("If that address is registered, we've sent a password reset link.")               # same answer either way
+    flash(t("msg.forgot.done"))               # same answer either way
     return redirect("/")
 
 @app.route("/reset/<token>", methods=["GET", "POST"])
 def reset(token):
-    bad = "That reset link is invalid or expired. Request a new one."
+    bad = t("msg.reset.invalid")
     try:
         email, tail = ser_reset.loads(token, max_age=3600)
     except (BadSignature, ValueError):
@@ -495,11 +634,11 @@ def reset(token):
     if request.method == "POST":
         pw = request.form["password"]
         if not 8 <= len(pw) <= 200:
-            flash("Password must be 8 to 200 characters.")
+            flash(t("msg.reset.length"))
             return redirect(request.path)
         db().execute("UPDATE users SET password_hash=?, verified=1, failed_logins=0, locked_until=NULL WHERE email=?", (generate_password_hash(pw), email))
         db().commit()                               # resetting via the inbox also proves the email address
-        flash("Password updated. You can log in now.")
+        flash(t("msg.reset.done"))
         return redirect("/")
     return page(RESET)
 
@@ -510,19 +649,19 @@ def predict():
     row = db().execute("SELECT east, west, updated FROM predictions WHERE email=?", (email,)).fetchone()
     if request.method == "POST":
         if row:
-            flash("You've already submitted your picks. They can't be changed.")
+            flash(t("msg.predict.already"))
             return redirect("/predict")
         if is_locked():
-            flash("Predictions are closed.")
+            flash(t("msg.predict.closed"))
             return redirect("/predict")
         east = [request.form.get(f"e{i}") for i in range(1, 16)]
         west = [request.form.get(f"w{i}") for i in range(1, 16)]
         if sorted(east) != sorted(EAST) or sorted(west) != sorted(WEST):
-            flash("Each of the 15 teams must be picked exactly once in each conference.")
+            flash(t("msg.predict.teams"))
             return redirect("/predict")
         awards = {k: " ".join(request.form.get("a_" + k, "").split()) for k, _ in AWARDS}   # trim, collapse spaces
         if any(not v or len(v) > 100 for v in awards.values()):
-            flash("Fill in every award (names up to 100 characters).")
+            flash(t("msg.predict.awards"))
             return redirect("/predict")
         d = db()
         try:                                        # INSERT only; the primary key (email) guarantees one submission
@@ -534,14 +673,14 @@ def predict():
             d.commit()                              # picks and awards are saved together or not at all
         except pyodbc.IntegrityError:               # double click or second tab: the first submit wins
             d.rollback()
-            flash("You've already submitted your picks. They can't be changed.")
+            flash(t("msg.predict.already"))
             return redirect("/predict")
         late = days_late(datetime.now(timezone.utc))
-        flash("Submitted! Your picks are final." + (f" Submitted {late} day(s) late: -{late} point(s)." if late else ""))
+        flash(t("msg.predict.ok") + (" " + t("msg.predict.ok.late", days=plural(late, "day"), points=plural(late, "point")) if late else ""))
         return redirect("/standings")
     saved = {"e": json.loads(row.east), "w": json.loads(row.west)} if row else {"e": [""] * 15, "w": [""] * 15}
     saved_awards = {r.award: r.pick for r in db().execute("SELECT award, pick FROM award_picks WHERE email=?", (email,)).fetchall()} if row else {}
-    return page(PREDICT, saved=saved, saved_awards=saved_awards, awards=AWARDS, confs=[("Eastern", "e", EAST), ("Western", "w", WEST)],
+    return page(PREDICT, saved=saved, saved_awards=saved_awards, awards=AWARDS, confs=[(t("conf.east"), "e", EAST), (t("conf.west"), "w", WEST)],
                 start=season_start(), lock=lock_time(), locked=is_locked(), late_now=days_late(datetime.now(timezone.utc)),
                 submitted=row is not None, submitted_at=row.updated if row else None)
 
@@ -550,9 +689,9 @@ def predict():
 def standings():
     if not has_prediction(session["email"]):
         if not is_locked():
-            flash("Fill in your predictions first.")
+            flash(t("msg.st.fillfirst"))
             return redirect("/predict")
-        flash("Predictions are closed and you didn't submit any, so you're not on the leaderboard.")
+        flash(t("msg.st.nopicks"))
     rows = db().execute("SELECT conf, pos, team, wins, losses, updated FROM standings ORDER BY conf, pos").fetchall()
     tables = {"E": [r for r in rows if r.conf == "E"], "W": [r for r in rows if r.conf == "W"]}
     actual = {k: [r.team for r in v] for k, v in tables.items()}
@@ -573,7 +712,7 @@ def admin():
             elif d.execute("UPDATE award_results SET winner=?, updated=SYSUTCDATETIME() WHERE award=?", (val, key)).rowcount == 0:
                 d.execute("INSERT INTO award_results(award, winner) VALUES(?,?)", (key, val))
         d.commit()
-        flash("Winners saved.")
+        flash(t("msg.admin.ok"))
         return redirect("/admin")
     return page(ADMIN, results=award_results(), awards=AWARDS)
 
