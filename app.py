@@ -256,6 +256,7 @@ def send_reset(email, password_hash):
                      "If you didn't ask for this, you can ignore this email.\n")
 
 # ---------- admin (enter the official award winners) ----------
+CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "").strip()   # shown in the privacy note; optional
 ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
 
 def is_admin():
@@ -275,10 +276,13 @@ button{padding:10px 18px;font:inherit;font-weight:600;cursor:pointer}
 table{width:100%;border-collapse:collapse}td,th{padding:4px 6px;border-bottom:1px solid #eee;text-align:left}
 nav{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px}
 .muted{color:#666;font-size:.9rem}
+footer{margin-top:32px;padding-top:12px;border-top:1px solid #eee;color:#666;font-size:.8rem}
 </style></head><body>
 <nav><a href="/"><b>NBA Predictions</b></a>{% if name %}<span><a href="/standings">Standings</a> · <a href="/predict">My picks</a>{% if admin %} · <a href="/admin">Admin</a>{% endif %} · {{ name }} · <a href="/logout">Log out</a></span>{% endif %}</nav>
 {% for m in get_flashed_messages() %}<div class="msg">{{ m }}</div>{% endfor %}
-{{ body|safe }}</body></html>"""
+{{ body|safe }}
+<footer>Independent fan project, not affiliated with, endorsed by, or sponsored by the National Basketball Association or any of its teams. Team and player names are used only to identify them. Standings come from public sources and may contain errors.</footer>
+</body></html>"""
 
 HOME = """<h1>Predict the final NBA standings</h1>
 <p>Rank all 30 teams, 1 to 15 in the East and 1 to 15 in the West, and see how you stack up against everyone else.</p>
@@ -287,7 +291,8 @@ HOME = """<h1>Predict the final NBA standings</h1>
 <div class="row"><input name="name" placeholder="Display name" maxlength="40" required></div>
 <div class="row"><input type="email" name="email" placeholder="Email" required autocomplete="email"></div>
 <div class="row"><input type="password" name="password" placeholder="Password (8+ characters)" minlength="8" required autocomplete="new-password"></div>
-<button>Register</button></fieldset></form>
+<button>Register</button>
+<p class="muted">We store your display name, email address, a hashed password and your predictions, only to run this game, and we don't share them.{% if contact %} To have your data deleted, write to <a href="mailto:{{ contact }}">{{ contact }}</a>.{% endif %}</p></fieldset></form>
 <form method="post" action="/login"><fieldset><legend>Log in</legend>
 <div class="row"><input type="email" name="email" placeholder="Email" required autocomplete="email"></div>
 <div class="row"><input type="password" name="password" placeholder="Password" required autocomplete="current-password"></div>
@@ -356,7 +361,7 @@ STANDINGS = """<h1>Standings</h1>
 {% else %}<p class="muted">Winners will appear here once they are announced.</p>{% endif %}"""
 
 def page(tpl, **ctx):
-    body = render_template_string(tpl, **ctx)
+    body = render_template_string(tpl, contact=CONTACT_EMAIL, **ctx)
     return render_template_string(LAYOUT, body=body, name=session.get("name"), admin=is_admin())
 
 def login_required(f):
