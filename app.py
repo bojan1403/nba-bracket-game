@@ -94,7 +94,7 @@ T = {
     "predict.title": "Moj kostur",
     "predict.submitted": "Tvoj kostur je poslat {date} i konačan je.",
     "predict.season": "Sezona počinje {start}; nove kosture primamo do {lock}.",
-    "predict.penalty": "Prognoze poslate nakon početka sezone gube 1 poen za svaki dan kašnjenja (najviše 5).",
+    "predict.penalty": "Kosturi poslati nakon početka sezone gube 1 poen za svaki dan kašnjenja (najviše 5).",
     "predict.closed": "Prijem kostura je završen.",
     "predict.latenow": "Ako pošalješ sada, kasniš {days} i gubiš {points}.",
     "predict.finalhint": "Kad jednom pošalješ, kostur se ne može menjati.",
@@ -427,29 +427,81 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").sp
 def is_admin():
     return bool(session.get("email")) and session["email"] in ADMIN_EMAILS
 
+# ---------- logo (a basketball whose seams are bones: kostur = skeleton) ----------
+LOGO_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#14171c"/><circle cx="256" cy="256" r="172" fill="none" stroke="#ff7a33" stroke-width="9"/><path d="M256 92V420" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="butt"/><circle cx="272.1" cy="90.0" r="17" fill="#ffffff"/><circle cx="239.8" cy="90.0" r="17" fill="#ffffff"/><circle cx="239.8" cy="422.0" r="17" fill="#ffffff"/><circle cx="272.1" cy="422.0" r="17" fill="#ffffff"/><path d="M92 256H420" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="butt"/><circle cx="90.0" cy="239.8" r="17" fill="#ffffff"/><circle cx="90.0" cy="272.1" r="17" fill="#ffffff"/><circle cx="422.0" cy="272.1" r="17" fill="#ffffff"/><circle cx="422.0" cy="239.8" r="17" fill="#ffffff"/><path d="M166.7 113.1Q252.6 256 166.7 398.9" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="butt"/><circle cx="179.5" cy="103.0" r="17" fill="#ffffff"/><circle cx="151.8" cy="119.7" r="17" fill="#ffffff"/><circle cx="151.8" cy="392.3" r="17" fill="#ffffff"/><circle cx="179.5" cy="409.0" r="17" fill="#ffffff"/><path d="M345.3 113.1Q259.4 256 345.3 398.9" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="butt"/><circle cx="360.2" cy="119.7" r="17" fill="#ffffff"/><circle cx="332.5" cy="103.0" r="17" fill="#ffffff"/><circle cx="332.5" cy="409.0" r="17" fill="#ffffff"/><circle cx="360.2" cy="392.3" r="17" fill="#ffffff"/></svg>'''
+
 # ---------- pages ----------
 LAYOUT = """<!doctype html><html lang="sr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ t('nav.brand') }}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>{{ t('nav.brand') }}</title><link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
-body{font:16px/1.5 system-ui,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#1a1a1a}
-fieldset{margin:0 0 16px;padding:12px 16px;border:1px solid #ccc;border-radius:8px}
-.row{display:flex;gap:8px;align-items:center;margin:6px 0}.row b{width:2.2em;text-align:right}
-select,input{padding:8px;font:inherit;flex:1;min-width:0}
-button{padding:10px 18px;font:inherit;font-weight:600;cursor:pointer}
-.msg{background:#fff3cd;padding:8px 12px;border-radius:6px;margin:8px 0}
-.two{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-table{width:100%;border-collapse:collapse}td,th{padding:4px 6px;border-bottom:1px solid #eee;text-align:left}
-nav{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.muted{color:#666;font-size:.9rem}
-details{border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin:8px 0}summary{cursor:pointer;font-weight:600}
-ol.picks{margin:8px 0;padding-left:2.2em}.exact{background:#d4edda}.zone{background:#fff3cd}.mine{border-color:#e8590c}
-footer{margin-top:32px;padding-top:12px;border-top:1px solid #eee;color:#666;font-size:.8rem}
+:root{--bg:#f5f6f8;--card:#fff;--ink:#14171c;--muted:#5d6572;--line:#e2e5ea;--accent:#c9460a;--on-accent:#fff;
+--exact:#d3f0dc;--zone:#fcebc0;--flash:#fff1d6;--r:12px}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--ink:#eceef1;--muted:#9aa3af;--line:#272c35;--accent:#ff7a33;--on-accent:#1a0d05;
+--exact:#17402a;--zone:#4a3a10;--flash:#3a2d12}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+a{color:var(--accent)}
+.wrap{max-width:760px;margin:0 auto;padding:0 16px 40px}
+header{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.bar{max-width:760px;margin:0 auto;padding:10px 16px 0;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:1.2rem;letter-spacing:-.02em;color:var(--ink);text-decoration:none}
+.brand i{font-style:normal;color:var(--accent)}
+.who{font-size:.85rem;color:var(--muted);display:flex;gap:10px;align-items:center;white-space:nowrap}
+.who a{color:var(--muted)}
+.tabs{max-width:760px;margin:0 auto;padding:0 8px;display:flex;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{padding:10px 10px;color:var(--muted);text-decoration:none;font-weight:600;font-size:.95rem;white-space:nowrap;border-bottom:3px solid transparent}
+.tabs a:hover{color:var(--ink)}
+.tabs a.on{color:var(--ink);border-bottom-color:var(--accent)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:4px}
+h1{font-size:1.75rem;line-height:1.2;letter-spacing:-.02em;margin:24px 0 8px}
+h2{font-size:1.1rem;margin:20px 0 8px}
+p{margin:0 0 12px}
+.muted{color:var(--muted);font-size:.9rem}
+fieldset,.card,details{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin:0 0 16px;min-width:0}
+legend{font-weight:700;padding:0 6px;font-size:1rem}
+.row{display:flex;gap:10px;align-items:center;margin:8px 0}
+.row b{flex:0 0 2rem;height:2rem;line-height:2rem;text-align:center;border-radius:50%;background:var(--bg);font-size:.85rem;font-variant-numeric:tabular-nums}
+select,input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;flex:1;min-width:0;min-height:44px}
+select:disabled,input:disabled{opacity:.75}
+button{font:inherit;font-weight:700;min-height:44px;padding:10px 20px;border:0;border-radius:8px;background:var(--accent);color:var(--on-accent);cursor:pointer}
+button:hover{filter:brightness(1.08)}
+form > button:last-child{width:100%}
+.msg{background:var(--flash);border:1px solid var(--line);border-left:4px solid var(--accent);padding:10px 14px;border-radius:8px;margin:14px 0 0}
+.two{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+td,th{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+tr:last-child td{border-bottom:0}
+th{font-size:.8rem;color:var(--muted);font-weight:600}
+tr.cut td{border-bottom:2px dashed var(--accent)}
+.rank{width:2.2rem;color:var(--muted)}
+.board td.score{font-size:1.25rem;font-weight:800;text-align:right}
+.board th:nth-child(n+3),.board td:nth-child(n+4){text-align:right}
+summary{cursor:pointer;font-weight:700;min-height:28px}
+details[open]>summary{margin-bottom:8px}
+details.mine{border-color:var(--accent)}
+ol.picks{margin:8px 0;padding-left:2.2rem}ol.picks li{padding:2px 6px;border-radius:6px;margin:2px 0}
+.exact{background:var(--exact)}.zone{background:var(--zone)}
+span.exact,span.zone{padding:2px 8px;border-radius:6px}
+footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:.8rem}
+@media (max-width:480px){h1{font-size:1.5rem}fieldset,.card,details{padding:12px}}
+@media (prefers-reduced-motion:no-preference){button{transition:filter .15s}}
 </style></head><body>
-<nav><a href="/"><b>{{ t('nav.brand') }}</b></a>{% if name %}<span><a href="/standings">{{ t('nav.standings') }}</a> · <a href="/predict">{{ t('nav.mypicks') }}</a> · <a href="/picks">{{ t('nav.picks') }}</a> · <a href="/rules">{{ t('nav.rules') }}</a>{% if admin %} · <a href="/admin">{{ t('nav.admin') }}</a>{% endif %} · {{ name }} · <a href="/logout">{{ t('nav.logout') }}</a></span>{% endif %}{% if not name %}<span><a href="/rules">{{ t('nav.rules') }}</a></span>{% endif %}</nav>
+<header><div class="bar"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">NBA <i>Kostur</i></a>
+{% if name %}<span class="who">{{ name }} <a href="/logout">{{ t('nav.logout') }}</a></span>{% endif %}</div>
+<nav class="tabs">{% if name %}
+<a href="/standings"{% if path == '/standings' %} class="on"{% endif %}>{{ t('nav.standings') }}</a>
+<a href="/predict"{% if path == '/predict' %} class="on"{% endif %}>{{ t('nav.mypicks') }}</a>
+<a href="/picks"{% if path == '/picks' %} class="on"{% endif %}>{{ t('nav.picks') }}</a>
+<a href="/rules"{% if path == '/rules' %} class="on"{% endif %}>{{ t('nav.rules') }}</a>
+{% if admin %}<a href="/admin"{% if path == '/admin' %} class="on"{% endif %}>{{ t('nav.admin') }}</a>{% endif %}
+{% else %}<a href="/rules"{% if path == '/rules' %} class="on"{% endif %}>{{ t('nav.rules') }}</a>{% endif %}</nav></header>
+<div class="wrap">
 {% for m in get_flashed_messages() %}<div class="msg">{{ m }}</div>{% endfor %}
 {{ body|safe }}
 <footer>{{ t('footer') }}</footer>
-</body></html>"""
+</div></body></html>"""
 
 HOME = """<h1>{{ t('home.title') }}</h1>
 <p>{{ t('home.intro') }}</p>
@@ -515,15 +567,15 @@ STANDINGS = """<h1>{{ t('st.title') }}</h1>
 {% else %}<p class="muted">{{ t('st.notloaded') }}</p>{% endif %}
 <div class="two">
 {% for title, key in [(t('conf.east'), 'E'), (t('conf.west'), 'W')] %}
-<div><h2>{{ title }}</h2><table>
-{% for r in tables[key] %}<tr><td>{{ r.pos }}</td><td>{{ r.team }}</td><td>{{ r.wins }}-{{ r.losses }}</td></tr>
+<div class="card"><h2 style="margin-top:0">{{ title }}</h2><table>
+{% for r in tables[key] %}<tr{% if r.pos == 10 %} class="cut"{% endif %}><td class="rank">{{ r.pos }}</td><td>{{ r.team }}</td><td style="text-align:right">{{ r.wins }}-{{ r.losses }}</td></tr>
 {% else %}<tr><td class="muted">{{ t('st.nodata') }}</td></tr>{% endfor %}</table></div>{% endfor %}
 </div>
 <h2>{{ t('st.leaderboard') }}</h2>
-<table><tr><th>#</th><th>{{ t('st.col.player') }}</th><th>{{ t('st.col.score') }}</th><th>{{ t('st.col.awards') }}</th><th>{{ t('st.col.late') }}</th></tr>
-{% for n, s, late, aw in board %}<tr><td>{{ loop.index }}</td><td>{{ n }}</td><td>{{ s }}</td><td class="muted">{% if aw %}+{{ aw }}{% endif %}</td><td class="muted">{% if late %}-{{ late }}{% endif %}</td></tr>{% endfor %}</table>
+<div class="card"><table class="board"><tr><th>#</th><th>{{ t('st.col.player') }}</th><th>{{ t('st.col.score') }}</th><th>{{ t('st.col.awards') }}</th><th>{{ t('st.col.late') }}</th></tr>
+{% for n, s, late, aw in board %}<tr><td class="rank">{{ loop.index }}</td><td>{{ n }}</td><td class="score">{{ s }}</td><td class="muted">{% if aw %}+{{ aw }}{% endif %}</td><td class="muted">{% if late %}-{{ late }}{% endif %}</td></tr>{% endfor %}</table></div>
 <h2>{{ t('st.awards.title') }}</h2>
-{% if results %}<table>{% for key, _ in awards %}<tr><td>{{ t('award.' + key) }}</td><td>{{ results.get(key) or t('st.awards.tba') }}</td></tr>{% endfor %}</table>
+{% if results %}<div class="card"><table>{% for key, _ in awards %}<tr><td>{{ t('award.' + key) }}</td><td>{{ results.get(key) or t('st.awards.tba') }}</td></tr>{% endfor %}</table></div>
 {% else %}<p class="muted">{{ t('st.awards.empty') }}</p>{% endif %}"""
 
 RULES = """<h1>{{ t('rules.title') }}</h1>
@@ -542,7 +594,7 @@ PICKS = """<h1>{{ t('picks.title') }}</h1>
 
 def page(tpl, **ctx):
     body = render_template_string(tpl, contact=CONTACT_EMAIL, **ctx)
-    return render_template_string(LAYOUT, body=body, name=session.get("name"), admin=is_admin())
+    return render_template_string(LAYOUT, body=body, name=session.get("name"), admin=is_admin(), path=request.path)
 
 def login_required(f):
     @wraps(f)
@@ -738,6 +790,14 @@ def standings():
     actual = {k: [r.team for r in v] for k, v in tables.items()}
     return page(STANDINGS, tables=tables, updated=rows[0].updated if rows else None, board=leaderboard(actual),
                 results=award_results(), awards=AWARDS)
+
+@app.get("/favicon.svg")
+def favicon():
+    return LOGO_SVG, 200, {"Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400"}
+
+@app.get("/favicon.ico")
+def favicon_ico():
+    return redirect("/favicon.svg", 301)
 
 @app.get("/rules")
 def rules():
