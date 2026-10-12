@@ -456,6 +456,7 @@ header{background:var(--card);border-bottom:1px solid var(--line);position:stick
 .tabs::-webkit-scrollbar{display:none}
 .tabs a{padding:10px 10px;color:var(--muted);text-decoration:none;font-weight:600;font-size:.95rem;white-space:nowrap;border-bottom:3px solid transparent}
 .tabs a:hover{color:var(--ink)}
+.tabs .off{padding:10px 10px;font-weight:600;font-size:.95rem;white-space:nowrap;color:var(--muted);opacity:.45;cursor:not-allowed;border-bottom:3px solid transparent}
 .tabs a.on{color:var(--ink);border-bottom-color:var(--accent)}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:4px}
 h1{font-size:1.75rem;line-height:1.2;letter-spacing:-.02em;margin:24px 0 8px}
@@ -494,10 +495,10 @@ footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);color:v
 <header><div class="bar"><a class="brand" href="/"><img src="/favicon.svg" alt="" width="30" height="30">NBA <i>Kostur</i></a>
 {% if name %}<span class="who">{{ name }} <a href="/logout">{{ t('nav.logout') }}</a></span>{% endif %}</div>
 <nav class="tabs">{% if name %}
-<a href="/standings"{% if path == '/standings' %} class="on"{% endif %}>{{ t('nav.standings') }}</a>
+{% if open_nav %}<a href="/standings"{% if path == '/standings' %} class="on"{% endif %}>{{ t('nav.standings') }}</a>{% else %}<span class="off" aria-disabled="true">{{ t('nav.standings') }}</span>{% endif %}
 <a href="/predict"{% if path == '/predict' %} class="on"{% endif %}>{{ t('nav.mypicks') }}</a>
-<a href="/picks"{% if path == '/picks' %} class="on"{% endif %}>{{ t('nav.picks') }}</a>
-<a href="/rules"{% if path == '/rules' %} class="on"{% endif %}>{{ t('nav.rules') }}</a>
+{% if open_nav %}<a href="/picks"{% if path == '/picks' %} class="on"{% endif %}>{{ t('nav.picks') }}</a>
+<a href="/rules"{% if path == '/rules' %} class="on"{% endif %}>{{ t('nav.rules') }}</a>{% else %}<span class="off" aria-disabled="true">{{ t('nav.picks') }}</span><span class="off" aria-disabled="true">{{ t('nav.rules') }}</span>{% endif %}
 {% if admin %}<a href="/admin"{% if path == '/admin' %} class="on"{% endif %}>{{ t('nav.admin') }}</a>{% endif %}
 {% else %}<a href="/rules"{% if path == '/rules' %} class="on"{% endif %}>{{ t('nav.rules') }}</a>{% endif %}</nav></header>
 <div class="wrap">
@@ -611,7 +612,8 @@ PICKS = """<h1>{{ t('picks.title') }}</h1>
 
 def page(tpl, **ctx):
     body = render_template_string(tpl, contact=CONTACT_EMAIL, **ctx)
-    return render_template_string(LAYOUT, body=body, name=session.get("name"), admin=is_admin(), path=request.path)
+    return render_template_string(LAYOUT, body=body, name=session.get("name"), admin=is_admin(), path=request.path,
+                                  open_nav=bool(session.get("email")) and (is_locked() or has_prediction(session["email"])))
 
 def login_required(f):
     @wraps(f)
