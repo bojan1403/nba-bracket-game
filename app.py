@@ -101,8 +101,11 @@ T = {
     "predict.select": "Izaberi tim…",
     "predict.awards.legend": "Individualne nagrade (po 2 poena)",
     "predict.awards.hint": "Upiši puno ime. Potrudi se da upišeš tačno ime.",
-    "predict.button": "Pošalji kostur",
-    "predict.confirm": "Da li želiš da pošalješ kostur? Posle slanja nema izmena.",
+    "predict.button": "Pregledaj kostur",
+    "predict.preview.title": "Proveri svoj kostur",
+    "predict.preview.hint": "Ovako izgleda tvoj kostur. Kad potvrdiš, šalje se i više se ne može menjati.",
+    "predict.preview.confirm": "Potvrdi i pošalji",
+    "predict.preview.back": "Nazad na izmene",
     "msg.predict.already": "Kostur je već poslat i ne može se menjati.",
     "msg.predict.closed": "Prijem kostura je završen.",
     "msg.predict.teams": "U svakoj konferenciji moraš izabrati svih 15 timova, svaki tačno jednom.",
@@ -467,7 +470,7 @@ select,input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid
 select:disabled,input:disabled{opacity:.75}
 button{font:inherit;font-weight:700;min-height:44px;padding:10px 20px;border:0;border-radius:8px;background:var(--accent);color:var(--on-accent);cursor:pointer}
 button:hover{filter:brightness(1.08)}
-form > button:last-child{width:100%}
+form > button{width:100%}form > button + button{margin-top:10px}button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
 .msg{background:var(--flash);border:1px solid var(--line);border-left:4px solid var(--accent);padding:10px 14px;border-radius:8px;margin:14px 0 0}
 .two{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
@@ -539,7 +542,7 @@ PREDICT = """<h1>{{ t('predict.title') }}</h1>
 {{ t('predict.penalty') }}
 {% if not submitted %}{% if locked %}<b>{{ t('predict.closed') }}</b>{% elif late_now %}<b>{{ t('predict.latenow', days=plural(late_now, 'day'), points=plural(late_now, 'point')) }}</b>{% endif %}{% endif %}</p>{% endif %}
 {% if not submitted and not locked %}<p class="muted">{{ t('predict.finalhint') }}</p>{% endif %}
-<form method="post" onsubmit='return confirm({{ t("predict.confirm")|tojson }})'>
+<form method="post"><input type="hidden" name="step" value="preview">
 {% for title, p, teams in confs %}
 <fieldset><legend>{{ title }}</legend>
 {% for i in range(1, 16) %}<div class="row"><b>{{ i }}.</b>
@@ -577,6 +580,20 @@ STANDINGS = """<h1>{{ t('st.title') }}</h1>
 <h2>{{ t('st.awards.title') }}</h2>
 {% if results %}<div class="card"><table>{% for key, _ in awards %}<tr><td>{{ t('award.' + key) }}</td><td>{{ results.get(key) or t('st.awards.tba') }}</td></tr>{% endfor %}</table></div>
 {% else %}<p class="muted">{{ t('st.awards.empty') }}</p>{% endif %}"""
+
+PREVIEW = """<h1>{{ t('predict.preview.title') }}</h1>
+<p class="muted">{{ t('predict.preview.hint') }}</p>
+{% if late_now %}<p><b>{{ t('predict.latenow', days=plural(late_now, 'day'), points=plural(late_now, 'point')) }}</b></p>{% endif %}
+<div class="two">{% for title, rows in [(t('conf.east'), east), (t('conf.west'), west)] %}
+<div class="card"><h2 style="margin-top:0">{{ title }}</h2><ol class="picks">{% for team in rows %}<li>{{ team }}</li>{% endfor %}</ol></div>{% endfor %}</div>
+<div class="card"><table>{% for key, pick in award_rows %}<tr><td>{{ t('award.' + key) }}</td><td><b>{{ pick }}</b></td></tr>{% endfor %}</table></div>
+<form method="post">
+{% for v in east %}<input type="hidden" name="e{{ loop.index }}" value="{{ v }}">{% endfor %}
+{% for v in west %}<input type="hidden" name="w{{ loop.index }}" value="{{ v }}">{% endfor %}
+{% for key, pick in award_rows %}<input type="hidden" name="a_{{ key }}" value="{{ pick }}">{% endfor %}
+<button name="step" value="confirm">{{ t('predict.preview.confirm') }}</button>
+<button name="step" value="edit" class="ghost" formnovalidate>{{ t('predict.preview.back') }}</button>
+</form>"""
 
 RULES = """<h1>{{ t('rules.title') }}</h1>
 <ul>{% for k in ['rules.top10', 'rules.low', 'rules.awards', 'rules.late', 'rules.final'] %}<li>{{ t(k) }}</li>{% endfor %}</ul>
@@ -735,6 +752,9 @@ def reset(token):
         return redirect("/")
     return page(RESET)
 
+def confs_for_form():
+    return [(t("conf.east"), "e", EAST), (t("conf.west"), "w", WEST)]
+
 @app.route("/predict", methods=["GET", "POST"])
 @login_required
 def predict():
@@ -747,15 +767,25 @@ def predict():
         if is_locked():
             flash(t("msg.predict.closed"))
             return redirect("/predict")
-        east = [request.form.get(f"e{i}") for i in range(1, 16)]
-        west = [request.form.get(f"w{i}") for i in range(1, 16)]
+        east = [request.form.get(f"e{i}", "") for i in range(1, 16)]
+        west = [request.form.get(f"w{i}", "") for i in range(1, 16)]
+        awards = {k: " ".join(request.form.get("a_" + k, "").split()) for k, _ in AWARDS}   # trim, collapse spaces
+        step = request.form.get("step", "preview")
+        def form_again():                           # the form again, with what the player typed so far (nothing is saved)
+            return page(PREDICT, saved={"e": east, "w": west}, saved_awards=awards, awards=AWARDS, confs=confs_for_form(),
+                        start=season_start(), lock=lock_time(), locked=False, late_now=days_late(datetime.now(timezone.utc)),
+                        submitted=False, submitted_at=None)
+        if step == "edit":
+            return form_again()
         if sorted(east) != sorted(EAST) or sorted(west) != sorted(WEST):
             flash(t("msg.predict.teams"))
-            return redirect("/predict")
-        awards = {k: " ".join(request.form.get("a_" + k, "").split()) for k, _ in AWARDS}   # trim, collapse spaces
+            return form_again()
         if any(not v or len(v) > 100 for v in awards.values()):
             flash(t("msg.predict.awards"))
-            return redirect("/predict")
+            return form_again()
+        if step != "confirm":                       # step == "preview": show it, save nothing yet
+            return page(PREVIEW, east=east, west=west, award_rows=[(k, awards[k]) for k, _ in AWARDS],
+                        late_now=days_late(datetime.now(timezone.utc)))
         d = db()
         try:                                        # INSERT only; the primary key (email) guarantees one submission
             d.execute("DELETE FROM award_picks WHERE email=?", (email,))     # leftovers of a deleted account, if any
@@ -773,7 +803,7 @@ def predict():
         return redirect("/standings")
     saved = {"e": json.loads(row.east), "w": json.loads(row.west)} if row else {"e": [""] * 15, "w": [""] * 15}
     saved_awards = {r.award: r.pick for r in db().execute("SELECT award, pick FROM award_picks WHERE email=?", (email,)).fetchall()} if row else {}
-    return page(PREDICT, saved=saved, saved_awards=saved_awards, awards=AWARDS, confs=[(t("conf.east"), "e", EAST), (t("conf.west"), "w", WEST)],
+    return page(PREDICT, saved=saved, saved_awards=saved_awards, awards=AWARDS, confs=confs_for_form(),
                 start=season_start(), lock=lock_time(), locked=is_locked(), late_now=days_late(datetime.now(timezone.utc)),
                 submitted=row is not None, submitted_at=row.updated if row else None)
 
